@@ -10,6 +10,8 @@ from vector_quantize_pytorch.latent_quantization import LatentQuantize
 from vector_quantize_pytorch.sim_vq import SimVQ
 from vector_quantize_pytorch.residual_sim_vq import ResidualSimVQ
 
+from vector_quantize_pytorch.drifting_vq import DriftingVQ
+
 from vector_quantize_pytorch.binary_mapper import BinaryMapper
 from vector_quantize_pytorch.hierarchical_vq import HierarchicalVQ
 
