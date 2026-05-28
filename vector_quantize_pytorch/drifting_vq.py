@@ -64,6 +64,8 @@ class DriftingVQ(Module):
         ste = True,               # if both are False, no recon gradient reaches encoder (matches Liu's toy code)
         energy_weight = 1.0,
         commitment_weight = 0.0,
+        energy_terms = ('pp', 'nn', 'pn'),   # subset of {'pp','nn','pn'} — for ablations
+        codebook_grad = True,                 # if False, codebook is a buffer (for drift+EMA hybrid)
         eps = 1e-8,
     ):
         super().__init__()
@@ -80,15 +82,27 @@ class DriftingVQ(Module):
         self.l2_normalize = l2_normalize
         self.eps = eps
 
-        # learnable codebook, initialized like SimVQ's frozen codebook
-        codebook = torch.randn(codebook_size, dim) * (dim ** -0.5)
-        self.codebook = nn.Parameter(codebook)
+        # codebook: learnable parameter by default; buffer when codebook_grad=False
+        # (drift+EMA hybrid wants codebook updated externally via EMA, not by gradient)
+        codebook_init = torch.randn(codebook_size, dim) * (dim ** -0.5)
+        self.codebook_grad = codebook_grad
+        if codebook_grad:
+            self.codebook = nn.Parameter(codebook_init)
+        else:
+            self.register_buffer('codebook', codebook_init)
 
         self.rotation_trick = rotation_trick
         self.ste = ste
 
         self.energy_weight = energy_weight
         self.commitment_weight = commitment_weight
+
+        # energy term subset for ablations: must be a subset of {'pp', 'nn', 'pn'}
+        valid = {'pp', 'nn', 'pn'}
+        terms = tuple(energy_terms)
+        if not set(terms).issubset(valid):
+            raise ValueError(f'energy_terms must be subset of {valid}, got {terms}')
+        self.energy_terms = terms
 
         # populated each forward() so callers (logging) can read per-term energies
         self.last_breakdown: dict[str, torch.Tensor] = {}
@@ -104,7 +118,7 @@ class DriftingVQ(Module):
 
     def _energy(self, hidden, codes):
         """
-        Drifting potential energy: U_pp + U_nn + U_pn.
+        Drifting potential energy: optional subset of (U_pp + U_nn + U_pn).
 
         hidden: (N, d) flattened encoder outputs.
         codes:  (K, d) codebook.
@@ -117,49 +131,66 @@ class DriftingVQ(Module):
         U_pp uses a random subset of size S = ``n_hidden_subsample`` to keep
         the N x N cost bounded; the subsampled pair sum is rescaled to be an
         unbiased estimator of the full sum.
+
+        ``self.energy_terms`` selects which terms to include — for ablations,
+        e.g. ``('pn', 'nn')`` drops U_pp (hidden-hidden repulsion).
         """
         N, K = hidden.shape[0], codes.shape[0]
         tau = self.tau
+        device = hidden.device
 
         q_h = 1.0 / N
         q_c = -1.0 / K
 
+        zero = torch.zeros((), device = device)
+        U_pn = zero
+        U_nn = zero
+        U_pp = zero
+        mean_d_hc = zero
+        mean_d_cc = zero
+
         # hidden <-> code attraction (full, cheap: N*K)
+        # we always compute d_hc because it's used by logging even if U_pn off
         d_hc = torch.cdist(hidden, codes)
-        U_pn = drifting_potential(d_hc, q_h * q_c, tau, self.eps).sum()
+        mean_d_hc = d_hc.mean().detach()
+        if 'pn' in self.energy_terms:
+            U_pn = drifting_potential(d_hc, q_h * q_c, tau, self.eps).sum()
 
         # code <-> code repulsion (full, cheap: K*K)
-        d_cc = torch.cdist(codes, codes)
-        V_cc = drifting_potential(d_cc, q_c * q_c, tau, self.eps)
-        # strict upper triangle, exclude self-pairs (r=0)
-        U_nn = (V_cc.sum() - V_cc.diagonal().sum()) / 2
+        if 'nn' in self.energy_terms:
+            d_cc = torch.cdist(codes, codes)
+            mean_d_cc = d_cc.mean().detach()
+            V_cc = drifting_potential(d_cc, q_c * q_c, tau, self.eps)
+            # strict upper triangle, exclude self-pairs (r=0)
+            U_nn = (V_cc.sum() - V_cc.diagonal().sum()) / 2
 
         # hidden <-> hidden repulsion: O(N^2) — subsample
-        S = min(self.n_hidden_subsample, N)
-        if S < N:
-            idx = torch.randperm(N, device = hidden.device)[:S]
-            h_sub = hidden[idx]
-            # unbiased rescale for sampling-without-replacement pair sum:
-            # E[ sum_{i<j in S} f(r_ij) ] = (S(S-1) / (N(N-1))) * sum_{i<j in N} f(r_ij)
-            scale = (N * (N - 1)) / max(S * (S - 1), 1)
-        else:
-            h_sub = hidden
-            scale = 1.0
+        if 'pp' in self.energy_terms:
+            S = min(self.n_hidden_subsample, N)
+            if S < N:
+                idx = torch.randperm(N, device = device)[:S]
+                h_sub = hidden[idx]
+                # unbiased rescale for sampling-without-replacement pair sum:
+                # E[ sum_{i<j in S} f(r_ij) ] = (S(S-1) / (N(N-1))) * sum_{i<j in N} f(r_ij)
+                scale = (N * (N - 1)) / max(S * (S - 1), 1)
+            else:
+                h_sub = hidden
+                scale = 1.0
 
-        d_hh = torch.cdist(h_sub, h_sub)
-        V_hh = drifting_potential(d_hh, q_h * q_h, tau, self.eps)
-        U_pp = scale * (V_hh.sum() - V_hh.diagonal().sum()) / 2
+            d_hh = torch.cdist(h_sub, h_sub)
+            V_hh = drifting_potential(d_hh, q_h * q_h, tau, self.eps)
+            U_pp = scale * (V_hh.sum() - V_hh.diagonal().sum()) / 2
 
         total = U_pp + U_nn + U_pn
 
         # stash detached scalars for outside logging
         self.last_breakdown = {
-            'U_pp': U_pp.detach(),
-            'U_nn': U_nn.detach(),
-            'U_pn': U_pn.detach(),
-            'U_total': total.detach(),
-            'mean_d_hc': d_hc.mean().detach(),
-            'mean_d_cc': d_cc.mean().detach(),
+            'U_pp': U_pp.detach() if torch.is_tensor(U_pp) else U_pp,
+            'U_nn': U_nn.detach() if torch.is_tensor(U_nn) else U_nn,
+            'U_pn': U_pn.detach() if torch.is_tensor(U_pn) else U_pn,
+            'U_total': total.detach() if torch.is_tensor(total) else total,
+            'mean_d_hc': mean_d_hc,
+            'mean_d_cc': mean_d_cc,
         }
         return total
 
