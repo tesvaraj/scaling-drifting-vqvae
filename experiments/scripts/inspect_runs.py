@@ -41,19 +41,27 @@ def list_group(group: str, project: str = DEFAULT_PROJECT, entity: Optional[str]
         return
 
     if table:
-        cols = ['name', 'state', 'step', 'val/psnr', 'val/ssim', 'val/rfid',
-                'val/utilization', 'val/perplexity']
-        widths = [40, 10, 8, 9, 9, 9, 14, 14]
+        cols = ['name', 'state', 'step',
+                'val/psnr', 'val/ssim', 'val/rfid', 'val/lpips',
+                'val/utilization', 'val/perplexity', 'val/gini', 'val/active_codes']
+        widths = [42, 10, 7, 9, 9, 9, 9, 12, 12, 9, 12]
         print(' '.join(c.ljust(w) for c, w in zip(cols, widths)))
         for r in runs:
             s = r.summary._json_dict if hasattr(r.summary, '_json_dict') else dict(r.summary)
+            nan = float('nan')
+            def _f(v):
+                try: return float(v)
+                except (TypeError, ValueError): return nan
             vals = [
-                r.name[:40], r.state[:10], str(s.get('_step', '')),
-                f"{s.get('val/psnr', float('nan')):.2f}",
-                f"{s.get('val/ssim', float('nan')):.4f}",
-                f"{s.get('val/rfid', float('nan')):.2f}",
-                f"{s.get('val/utilization', float('nan')):.3f}",
-                f"{s.get('val/perplexity', float('nan')):.1f}",
+                r.name[:42], r.state[:10], str(s.get('_step', '')),
+                f"{_f(s.get('val/psnr')):.2f}",
+                f"{_f(s.get('val/ssim')):.4f}",
+                f"{_f(s.get('val/rfid')):.2f}",
+                f"{_f(s.get('val/lpips')):.4f}",
+                f"{_f(s.get('val/utilization')):.3f}",
+                f"{_f(s.get('val/perplexity')):.1f}",
+                f"{_f(s.get('val/gini')):.4f}",
+                f"{_f(s.get('val/active_codes')):.0f}",
             ]
             print(' '.join(v.ljust(w) for v, w in zip(vals, widths)))
     else:

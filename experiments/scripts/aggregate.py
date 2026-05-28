@@ -16,9 +16,18 @@ import fire
 
 
 METRIC_COLS = [
+    # reconstruction quality
     'val/psnr', 'val/ssim', 'val/lpips', 'val/rfid',
+    # codebook utilization
     'val/utilization', 'val/perplexity', 'val/entropy_nats', 'val/gini',
     'val/active_codes',
+    # codebook geometry (distance structure)
+    'codebook/norm_mean', 'codebook/pair_dist_mean', 'codebook/pair_dist_min',
+    'codebook/pair_dist_std',
+    # hidden geometry
+    'hidden/hidden_norm_mean',
+    # drift energy breakdown (nan for non-drift methods)
+    'drift/U_nn', 'drift/U_pn', 'drift/U_pp', 'drift/U_total',
 ]
 
 
@@ -51,7 +60,12 @@ def main(phase: str):
             with open(cfg_path) as f:
                 cfg = json.load(f)
 
-        final = summary.get('final', {}) if summary else _last_row(run_dir / 'val_curves.csv')
+        if summary:
+            # recover_wandb.py wraps metrics in 'final'; train.py writes them at top level
+            final = summary.get('final') or {k: v for k, v in summary.items()
+                                             if isinstance(v, (int, float, str, bool))}
+        else:
+            final = _last_row(run_dir / 'val_curves.csv')
 
         row = {
             'run_id': run_dir.name,

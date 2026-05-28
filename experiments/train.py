@@ -198,6 +198,10 @@ def save_pca_figure(quantizer, hidden_sample: torch.Tensor, counts: torch.Tensor
         return
     cb = cb.float().cpu()
     h = hidden_sample.float().cpu()
+    # normalize hiddens to unit sphere so they're on the same scale as the
+    # L2-normalized codebook vectors; without this the scale mismatch (~8× raw
+    # hidden norm vs ~1 code norm) makes the PCA misleading
+    h = h / h.norm(dim=-1, keepdim=True).clamp(min=1e-8)
 
     # fit PCA on codebook ∪ hiddens to share the projection axes
     combined = torch.cat([cb, h], dim = 0)
@@ -518,9 +522,15 @@ def train(cfg: TrainConfig) -> dict:
                 write_csv(val_pair, row)
                 if use_wandb:
                     wandb_row = dict(row)
+                    _counts = val_counts.numpy()
+                    if cfg.codebook_size > 512:
+                        import numpy as np
+                        bs = (cfg.codebook_size + 511) // 512
+                        pad = (-cfg.codebook_size) % bs
+                        _counts = np.pad(_counts, (0, pad)).reshape(-1, bs).sum(axis=1)
+                    _bins = list(range(len(_counts) + 1))
                     wandb_row['codebook/usage_hist'] = wandb.Histogram(
-                        np_histogram = (val_counts.numpy(),
-                                        list(range(cfg.codebook_size + 1)))
+                        np_histogram=(_counts, _bins)
                     )
                     wandb.log(wandb_row, step = step)
                 last_summary = row

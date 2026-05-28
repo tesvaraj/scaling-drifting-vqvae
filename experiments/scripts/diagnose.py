@@ -60,8 +60,9 @@ def main(phase: str, run_id: str, tail: int = 10, fetch_modal: bool = False):
     print(f'=== training rows: {len(curves)} ===')
     if curves:
         cols = ['step', 'train/rec_loss', 'train/psnr', 'codebook/utilization',
-                'codebook/perplexity']
-        widths = [10, 12, 9, 14, 14]
+                'codebook/perplexity', 'codebook/active_codes',
+                'drift/U_nn', 'drift/U_pn', 'drift/U_total']
+        widths = [10, 12, 9, 14, 14, 14, 12, 12, 12]
         header = ' '.join(c.ljust(w) for c, w in zip(cols, widths))
         print(header)
         for r in curves[-tail:]:
@@ -70,9 +71,9 @@ def main(phase: str, run_id: str, tail: int = 10, fetch_modal: bool = False):
 
     print(f'=== validation rows: {len(val_curves)} ===')
     if val_curves:
-        cols = ['step', 'val/psnr', 'val/ssim', 'val/rfid', 'val/perplexity',
-                'val/utilization']
-        widths = [10, 9, 9, 9, 14, 14]
+        cols = ['step', 'val/psnr', 'val/ssim', 'val/rfid', 'val/lpips',
+                'val/perplexity', 'val/utilization', 'val/gini', 'val/active_codes']
+        widths = [10, 9, 9, 9, 9, 12, 12, 9, 12]
         print(' '.join(c.ljust(w) for c, w in zip(cols, widths)))
         for r in val_curves:
             print(' '.join((r.get(c, '')[:w]).ljust(w) for c, w in zip(cols, widths)))
