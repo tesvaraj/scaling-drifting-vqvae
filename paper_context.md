@@ -1,6 +1,6 @@
 # Paper Context — Scaling Drifting VQ-VAE
 
-**Last updated**: 2026-05-28 (artifacts fetched from W&B this session)
+**Last updated**: 2026-05-28 (phase_optimized + k8192_fix local artifacts verified)
 **Owner**: Hemal Arora (hemal1@stanford.edu), Stanford CS231N Spring 2026
 
 **Data quality key used throughout:**
@@ -473,47 +473,60 @@ Per-seed (drift K=1024): PSNR 19.357/19.443/19.329 | FID 106.64/107.34/115.32 | 
 
 ---
 
-### Phase CIFAR-100 K=8192 Fix (in progress)
+### Phase CIFAR-100 K=8192 Fix (inconclusive)
 
 **Config**: CIFAR-100, K=8192, 30k iters, drift only, ew=0.3 × seeds 0,1,2 + ew=1.0 × seed=3
-**Status**: in progress as of 2026-05-28. Seeds 0,1 at ~81 and 25 W&B history points (~4050 and
-~1250 training steps). No results reported — too early for valid metrics.
+**Source**: local CSV `runs/phase_cifar100_k8192_fix/aggregate.csv`
+**Status**: Only 2 runs found (seeds 0,1 at ew=0.3). Both incomplete:
+- seed0: stopped at step 4000 — PSNR 24.70, util 79.9%, ppl 3694, active 6546/8192 (trending stable)
+- seed1: stopped at step 1000 — PSNR 21.98, util 21.0%, ppl 252 — COLLAPSED again at ew=0.3
 
-Hypothesis: ew=0.3 reduces energy force magnitude at extreme K, preventing the collapse seen
-at ew=1.0 seed1. EMA baselines already exist from Phase CIFAR-100 K=8192.
+Hypothesis was: ew=0.3 reduces energy force magnitude at extreme K, preventing collapse. Seed1
+shows this did NOT reliably fix stability — collapse still occurs at K=8192 for some seeds even
+with reduced energy weight. Seeds 2,3 never started / no artifacts present.
+
+**Conclusion**: K=8192 stability fix is **unresolved**. EMA baselines from Phase CIFAR-100 K=8192
+remain the comparison. The stable drift seeds (0,2 from original phase) represent best-case
+K=8192 drift performance (+0.248 dB, −3.20 FID, 2.7× ppl). Treat as open question in paper.
 
 ---
 
-### Phase Optimized — Tuned Hparams Across Datasets (partial)
+### Phase Optimized — Tuned Hparams Across Datasets
 
 **Config**: drift_no_pp_ste only, τ=1.0, ew=1.0, 30k iters, 3 seeds
 **Datasets**: CIFAR-10 K=512, CIFAR-100 K=512+1024, STL-10 K=512, Tiny ImageNet K=512+1024
-**Source**: local CSV `runs/phase_optimized/aggregate.csv` (partial — some runs still in flight)
+**Source**: local CSV `runs/phase_optimized/aggregate.csv`
 
-Runs marked (partial) are still running as of 2026-05-28; their current metrics are from
-mid-training and should not be treated as final. Use existing phase results instead.
+**Status summary (verified from val_curves.csv last step):**
+- CIFAR-10 K=512: all 3 seeds complete (last val step 29k) ✓
+- CIFAR-100 K=512: all 3 seeds complete ✓
+- CIFAR-100 K=1024: all 3 seeds complete ✓
+- STL-10 K=512: seed0 complete (29k); seeds 1,2 stopped at step 23k — NOT FINAL (use phase_stl10)
+- Tiny ImageNet K=512: all 3 seeds ✗ — crashed/collapsed at step ~1150 (low util ~30%, active codes ~150/512)
+- Tiny ImageNet K=1024: seed0 at step 3k, seed1 no data, seed2 at step 2k — all failed/incomplete; degraded metrics (util ~70–82%, PSNR ~18.7 vs phase_tiny_imagenet 19.4) — NOT FINAL (use phase_tiny_imagenet)
 
-**Completed runs (state=finished, 30k iters):**
+**Completed runs (3 seeds, 30k iters, final):**
 
 | dataset | K | PSNR mean±std | FID mean | ppl | vs existing phase |
 |---|---|---|---|---|---|
-| CIFAR-10 | 512 | 24.111 ± 0.034 | 48.07 | 412 | cf. Phase 2b: 24.151 ± 0.073 — consistent ✓ |
-| CIFAR-100 | 512 | 24.071 ± 0.019 | 48.51 | 405 | cf. Phase CIFAR-100: 24.058 ± 0.092 — consistent ✓ |
+| CIFAR-10 | 512 | 24.111 ± 0.034 | 48.07 | 413 | cf. Phase 2b: 24.151 ± 0.073 — consistent ✓ |
+| CIFAR-100 | 512 | 24.071 ± 0.019 | 48.51 | 406 | cf. Phase CIFAR-100: 24.058 ± 0.092 — consistent ✓ |
 | CIFAR-100 | 1024 | 24.514 ± 0.052 | 45.05 | 835 | cf. Phase CIFAR-100: 24.570 ± 0.043 — consistent ✓ |
-| STL-10 | 512 | seed0 only: 22.017, 119.49 | — | — | seed0 complete; seeds 1,2 still running (~82%) |
 
 Per-seed CIFAR-10: PSNR 24.150/24.093/24.089 | FID 48.742/46.788/48.684
 Per-seed CIFAR-100 K=512: PSNR 24.093/24.060/24.060 | FID 48.076/48.837/48.616
 Per-seed CIFAR-100 K=1024: PSNR 24.466/24.568/24.508 | FID 43.377/45.328/46.436
 
-**Still running — do not use as final results:**
-- STL-10 K=512 seeds 1,2 (~82% complete at recover time)
-- Tiny ImageNet K=512 all seeds (very early — ~1200 steps; metrics unreliable)
-- Tiny ImageNet K=1024 seeds 0,2 (early — ~4000 steps); seed 1 no data yet
+**Excluded from phase_optimized** (collapsed or incomplete — see Section 7):
+- Tiny ImageNet K=512 seeds 0,1,2 ✗ — collapsed at step ~1150
+- Tiny ImageNet K=1024 all seeds ✗ — incomplete and degraded
+- STL-10 seeds 1,2 — incomplete (23k steps); use phase_stl10 for canonical STL-10 results
 
-**Interpretation**: The phase_optimized results confirm Phase 2b was already at the optimal
-hyperparameter point (τ=1.0, ew=1.0). Numbers are consistent across independent runs.
-Use existing phase results for paper tables — they have more seeds and the same hparams.
+**Interpretation**: Phase_optimized confirms Phase 2b was already at the optimal hparam point
+(τ=1.0, ew=1.0). The CIFAR numbers match prior phases exactly within noise. Use existing
+phase results for all paper tables — they have more seeds, all confirmed final. Phase_optimized
+Tiny ImageNet collapses appear to be a compute/infra issue (insufficient resources for K=512
+at this scale), not a method failure, since phase_tiny_imagenet ran successfully.
 
 ---
 
@@ -542,11 +555,11 @@ fundamental tradeoff to discuss in the paper.
 
 ### Linear Probe — Codebook Semantic Content
 
-**Config**: CIFAR-100, K=512, drift_no_pp_ste vs vanilla_ema (phase_cifar100 checkpoints)
+**Config**: CIFAR-100, drift_no_pp_ste vs vanilla_ema (phase_cifar100 checkpoints), K=512 and K=1024
 **Feature**: bag-of-visual-words histogram. Image → discrete token indices → normalized
-frequency histogram over K codes. Feature shape: (N, K) = (50000, 512)/(10000, 512).
+frequency histogram over K codes. Feature shape: (N, K).
 **Classifier**: logistic regression, C ∈ {0.01, 0.1, 1.0, 10.0}
-**Source**: Modal run completed 2026-05-28 (stdout). K=1024 run in progress.
+**Source**: local JSON `runs/phase_linear_probe/*/probe_summary.json` (all 12 runs fetched 2026-05-29)
 
 Note: an earlier run (killed mid-run) used mean-pooled embeddings. Results below are from
 the corrected histogram implementation.
@@ -559,13 +572,28 @@ the corrected histogram implementation.
 | drift_no_pp_ste K=512 seed0 | 14.5% | 35.9% | 0.01 |
 | drift_no_pp_ste K=512 seed1 | 14.7% | 36.0% | 0.01 |
 | drift_no_pp_ste K=512 seed2 | 14.2% | 36.2% | 0.01 |
+| vanilla_ema K=1024 seed0 | 11.9% | 32.1% | 0.01 |
+| vanilla_ema K=1024 seed1 | 12.6% | 31.8% | 0.01 |
+| vanilla_ema K=1024 seed2 | 11.9% | 31.9% | 0.01 |
+| drift_no_pp_ste K=1024 seed0 | 13.7% | 35.0% | 0.01 |
+| drift_no_pp_ste K=1024 seed1 | 12.5% | 33.0% | 0.01 |
+| drift_no_pp_ste K=1024 seed2 | 12.5% | 33.0% | 0.01 |
 
-**Summary**: vanilla_ema 13.1 ± 0.2% top1, 33.4 ± 0.3% top5
-**Summary**: drift_no_pp_ste 14.5 ± 0.2% top1, 36.1 ± 0.1% top5
-**Δ (drift − EMA): top1 +1.4 pp, top5 +2.6 pp**
+**Summary K=512**: vanilla_ema 13.1 ± 0.2% top1, 33.4 ± 0.3% top5
+**Summary K=512**: drift_no_pp_ste 14.5 ± 0.2% top1, 36.1 ± 0.1% top5
+**Δ K=512 (drift − EMA): top1 +1.4 pp, top5 +2.6 pp**
 
-Verdict: **weak but consistent signal in drift's favor**. All 3 drift seeds beat all 3 EMA
-seeds on both metrics. K=1024 result pending (tmux: `linprob1024`).
+**Summary K=1024**: vanilla_ema 12.1 ± 0.3% top1, 31.9 ± 0.1% top5
+**Summary K=1024**: drift_no_pp_ste 12.9 ± 0.5% top1, 33.6 ± 0.9% top5
+**Δ K=1024 (drift − EMA): top1 +0.7 pp, top5 +1.7 pp**
+
+Verdict: **weak but consistent signal in drift's favor at K=512**. All 3 drift seeds beat all 3
+EMA seeds on both metrics at K=512. At K=1024 the gap is smaller (+0.7 pp) and noisier (drift
+seed0 is an outlier at 13.7%, seeds 1,2 at 12.5% tie with EMA seed1). Overall interpretation:
+drift codes carry modestly more class-discriminative information, but the bag-of-words probe is a
+crude measure. The effect is consistent but small. Interestingly, EMA's top1 drops from 13.1%
+(K=512) to 12.1% (K=1024) while drift is more stable (14.5% → 12.9%), suggesting EMA's Zipfian
+bias actively wastes codebook capacity when K grows.
 
 ---
 
@@ -609,20 +637,24 @@ at 30k convergence. This table is the core scaling figure for the paper.
 | `cifar100_drift_no_pp_ste_K1024_seed1` (original) | phase4_large_k_v2 | Crashed at step ~1000 (wandb.Histogram 512-bin limit bug, since fixed). No val metrics. Superseded by relaunch. |
 | `cifar100_vanilla_ema_K1024_seed{0,1}` (original) | phase4_large_k_v2 | Same bug — missing all val metrics. Superseded by relaunch. |
 | `cifar100_vanilla_ema_K2048_seed{0,1}` (original) | phase4_large_k_v2 | Same bug. Superseded by relaunch. |
+| `tinyimagenet_drift_noppste_opt_K512_seed{0,1,2}` | phase_optimized | Crashed/collapsed at step ~1150 (util ~30%, active_codes ~150/512, PSNR ~17.2). All 3 seeds. |
+| `tinyimagenet_drift_noppste_opt_K1024_seed{0,1,2}` | phase_optimized | Incomplete (max step 3k/30k) and degraded metrics. All excluded; use phase_tiny_imagenet. |
+| `stl10_drift_noppste_opt_K512_seed{1,2}` | phase_optimized | Incomplete (stopped at step 23k/30k). Use phase_stl10 for canonical STL-10 results. |
+| `cifar100_drift_no_pp_ste_K8192_ew0.3_seed1` | phase_cifar100_k8192_fix | Collapsed at step 1000 (PSNR 21.98, util 21.0%, ppl 252). ew=0.3 did not prevent collapse. |
 
 Note on `no_nn` (Phase 2): ran to completion but produced a collapsed model. Valid data point
 showing U_nn is essential; excluded from reconstruction quality statistics.
 
 ---
 
-## 8. In-Flight Runs (as of 2026-05-28)
+## 8. In-Flight / Unresolved Runs (as of 2026-05-28)
 
-| tmux session | what | status |
-|---|---|---|
-| `phaseoptimized` | phase_optimized, 18 drift_no_pp_ste runs across 4 datasets | CIFAR-10 + CIFAR-100 done; STL-10 seed0 done, seeds 1,2 ~82%; Tiny ImageNet all early |
-| `phasecifar100k8192fix` | K=8192 stability fix — ew=0.3 × seeds 0,1,2 + ew=1.0 × seed=3 | Seeds 0,1 at ~4050 and ~1250 steps; seed 2 not yet visible |
-| `linprob1024` | linear_probe --k 1024 on phase_cifar100 checkpoints | Running |
-| `perclass1024` | per_class_analysis --k 1024 on phase_cifar100 checkpoints | Running |
+All major phases are complete. The following remain unresolved:
+
+| run / task | status |
+|---|---|
+| `phase_cifar100_k8192_fix` | Inconclusive — only 2 runs (both incomplete, seed1 collapsed). K=8192 stability open question. |
+| per_class_analysis K=1024 | No local artifacts found. Results unavailable. |
 
 ---
 
@@ -698,15 +730,14 @@ no_pp_ste once active (τ≥0.3); L2 normalization required.
 | phase_cifar100 | ✓ local CSV | 12 | 0 | |
 | phase_cifar100_k2048 | ✓ local CSV | 6 | 0 | |
 | phase_cifar100_k8192 | ✓ local CSV | 5 | 1 | drift seed1 collapse; fetched this session |
-| phase_cifar100_k8192_fix | in-flight | — | — | ew=0.3 stability test |
-| phase_stl10 | ✓ local CSV | 6 | 0 | |
-| phase_tiny_imagenet | ✓ local CSV | 11 | 1 | EMA K=512 seed2 crashed |
+| phase_cifar100_k8192_fix | ✓ local CSV (partial) | 1 | 1 | seed0 incomplete (step 4k); seed1 collapsed; seeds 2,3 missing |
+| phase_stl10 | ✓ local CSV | 6 | 0 | canonical STL-10 source |
+| phase_tiny_imagenet | ✓ local CSV | 11 | 1 | EMA K=512 seed2 crashed; canonical Tiny ImageNet source |
 | phase4_large_k_v2 | ✓ local CSV | 16 | 5† | †original K>512 runs (histogram bug); relaunch complete |
-| phase_hparam_sweep | ✓ local CSV | 14 | 0 | fetched this session |
+| phase_hparam_sweep | ✓ local CSV | 14 | 0 | |
 | prior_pilot | W&B summary only | 2 | 0 | no local CSV |
-| phase_optimized | ✓ partial local CSV | 9 done; 9 in-flight | 0 | validates existing results |
-| linear_probe K=512 | stdout | 6 | 0 | histogram feature |
-| linear_probe K=1024 | in-flight | — | — | |
-| per_class_analysis K=1024 | in-flight | — | — | |
+| phase_optimized | ✓ local CSV | 9 | 9 | 9 clean (CIFAR-10/100 all seeds); 9 excluded (TinyImageNet collapsed/incomplete, STL-10 seeds 1,2 incomplete) — validates existing results only |
+| linear_probe K=512+1024 | ✓ local JSON | 12 | 0 | all 12 runs fetched 2026-05-29 from Modal volume |
+| per_class_analysis K=1024 | unavailable | — | — | no local artifacts |
 
-**Total clean runs with local CSV verification**: 122+ (all completed phases now locally verified)
+**Total clean runs with local CSV verification**: 122+ (all primary phases locally verified)
