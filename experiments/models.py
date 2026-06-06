@@ -80,6 +80,19 @@ class VQAutoEncoder(nn.Module):
         return indices
 
     def decode_indices(self, indices):
-        """Decode code indices back to images — for downstream prior sampling."""
-        q = self.quantizer.indices_to_codes(indices)
+        """Decode code indices back to images — for downstream prior sampling.
+
+        Quantizers expose different index->code methods: the drift quantizers
+        have ``indices_to_codes``; the library's VectorQuantize (EMA) and SimVQ
+        expose ``get_output_from_indices``. Support both so the EMA baseline can
+        be decoded for generation, not just the drift variants.
+        """
+        quant = self.quantizer
+        if hasattr(quant, 'indices_to_codes'):
+            q = quant.indices_to_codes(indices)
+        elif hasattr(quant, 'get_output_from_indices'):
+            q = quant.get_output_from_indices(indices)
+        else:
+            raise AttributeError(
+                f'{type(quant).__name__} has no index->code method for decoding')
         return self.decoder(q)

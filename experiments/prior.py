@@ -77,6 +77,9 @@ class PriorConfig:
     eval_gen_fid: bool = False
     n_gen_samples: int = 2000
     gen_temperature: float = 1.0
+    # sampling-temperature sweep for gen-FID (FID is very temperature-sensitive,
+    # so a fair drift-vs-EMA comparison must report the curve / best point)
+    eval_temperatures: tuple = (0.8, 0.9, 1.0, 1.1)
 
     # wandb
     wandb_project: str = 'drifting-vqvae-231n'
@@ -337,39 +340,72 @@ def train_prior(cfg: PriorConfig) -> dict:
                 wandb.log({'val/nll_bits': val_nll}, step=step)
 
     # ----- generation eval (optional) -----
+    # We report two FIDs so the tokenizer and the prior can be told apart:
+    #   recon-FID : decode the REAL val tokens -> the ceiling a perfect prior could
+    #               reach. Isolates tokenizer quality.
+    #   gen-FID   : decode tokens SAMPLED from the prior, swept over sampling
+    #               temperature. The gap (gen - recon) is what the prior costs.
     gen_fid = None
     sample_gini = None
+    recon_fid = None
+    best_temp = None
+    gen_fid_by_temp = {}
     if cfg.eval_gen_fid:
+        import copy
         from torchmetrics.image.fid import FrechetInceptionDistance
-        fid_metric = FrechetInceptionDistance(normalize=True).to(device)
 
-        # Real images from val
-        print('Computing generation FID...')
+        H = W = int(math.sqrt(seq_len))
+        n_eval = min(cfg.n_gen_samples, val_tokens.shape[0])
+
+        # Real-image FID statistics, accumulated once and reused for every fake set.
+        print('Building real FID statistics...')
+        fid_base = FrechetInceptionDistance(normalize=True).to(device)
         with torch.no_grad():
             for batch in DataLoader(ds.val, batch_size=128):
                 x = batch[0] if isinstance(batch, (list, tuple)) else batch
-                fid_metric.update((x.to(device) * 0.5 + 0.5).clamp(0, 1), real=True)
+                fid_base.update((x.to(device) * 0.5 + 0.5).clamp(0, 1), real=True)
 
-        # Generated images
-        H = W = int(math.sqrt(seq_len))
-        sample_counts = torch.zeros(K, dtype=torch.long)
+        def _fake_fid(tokens_2d_iter):
+            """Clone the real-stats metric, stream fake images through it, compute.
+            Returns (fid, sample_gini)."""
+            fid = copy.deepcopy(fid_base)
+            counts = torch.zeros(K, dtype=torch.long)
+            with torch.no_grad():
+                for tokens_2d in tokens_2d_iter:
+                    counts += tokens_2d.reshape(-1).cpu().bincount(minlength=K)
+                    imgs = vqvae.decode_indices(tokens_2d.to(device)).clamp(-1, 1)
+                    fid.update((imgs * 0.5 + 0.5).clamp(0, 1), real=False)
+            return fid.compute().item(), _gini(counts)
+
+        # (1) reconstruction-FID reference (decode the real val tokens)
+        print('Computing reconstruction-FID reference...')
+        def _recon_iter():
+            for start in range(0, n_eval, 128):
+                yield val_tokens[start:start + 128].reshape(-1, H, W)
+        recon_fid, _ = _fake_fid(_recon_iter())
+        print(f'  recon-FID (perfect-prior ceiling): {recon_fid:.2f}')
+
+        # (2) generation-FID swept over sampling temperature
         prior.eval()
-        with torch.no_grad():
-            for start in range(0, cfg.n_gen_samples, 128):
-                n = min(128, cfg.n_gen_samples - start)
-                tokens = prior.sample(n, temperature=cfg.gen_temperature, device=device)
-                sample_counts += tokens.reshape(-1).cpu().bincount(minlength=K)
-                tokens_2d = tokens.reshape(n, H, W)
-                gen_imgs = vqvae.decode_indices(tokens_2d).clamp(-1, 1)
-                fid_metric.update((gen_imgs * 0.5 + 0.5).clamp(0, 1), real=False)
-
-        gen_fid = fid_metric.compute().item()
-        sample_gini = _gini(sample_counts)
+        for temp in cfg.eval_temperatures:
+            def _gen_iter(temp=temp):
+                for start in range(0, n_eval, 128):
+                    n = min(128, n_eval - start)
+                    yield prior.sample(n, temperature=temp, device=device).reshape(n, H, W)
+            fid_t, gini_t = _fake_fid(_gen_iter())
+            gen_fid_by_temp[float(temp)] = {'gen_fid': fid_t, 'sample_gini': gini_t}
+            print(f'  gen-FID @ T={temp:.2f}: {fid_t:.2f}  sample Gini {gini_t:.3f}')
         prior.train()
-        print(f'Generation FID: {gen_fid:.2f}  sample Gini: {sample_gini:.3f}  '
-              f'(train Gini was {train_gini:.3f})')
+
+        best_temp = min(gen_fid_by_temp, key=lambda t: gen_fid_by_temp[t]['gen_fid'])
+        gen_fid = gen_fid_by_temp[best_temp]['gen_fid']
+        sample_gini = gen_fid_by_temp[best_temp]['sample_gini']
+        print(f'Best gen-FID {gen_fid:.2f} at T={best_temp:.2f}  '
+              f'(recon-FID {recon_fid:.2f}, prior gap {gen_fid - recon_fid:+.2f}, '
+              f'train Gini {train_gini:.3f})')
         if wandb:
-            wandb.log({'eval/gen_fid': gen_fid, 'eval/sample_gini': sample_gini,
+            wandb.log({'eval/gen_fid': gen_fid, 'eval/recon_fid': recon_fid,
+                       'eval/best_temp': best_temp, 'eval/sample_gini': sample_gini,
                        'eval/train_gini': train_gini})
 
     if wandb:
@@ -385,6 +421,9 @@ def train_prior(cfg: PriorConfig) -> dict:
         'final_val_nll': nll_curve[-1]['val_nll'] if nll_curve else None,
         'train_gini': train_gini,
         'gen_fid': gen_fid,
+        'recon_fid': recon_fid,
+        'best_temp': best_temp,
+        'gen_fid_by_temp': gen_fid_by_temp,
         'sample_gini': sample_gini,
         'nll_curve': nll_curve,
         'wallclock_s': time.time() - t0,

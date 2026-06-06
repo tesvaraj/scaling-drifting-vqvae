@@ -461,26 +461,53 @@ def prior_full(phase: str = 'phase_cifar100', k: int = 512):
     results = [c.get() for c in calls]
 
     # summary table
-    print(f"\n{'='*70}")
-    print(f"PRIOR FULL RESULTS  (K={k}, phase={phase}, 20k steps)")
-    print(f"{'run_id':<35} {'val NLL':>10} {'gen FID':>10} {'smp Gini':>10}")
-    print('-'*70)
-    for r in results:
-        nll = r['best_val_nll']
-        fid = r['gen_fid'] if r['gen_fid'] is not None else float('nan')
-        gini = r['sample_gini'] if r['sample_gini'] is not None else float('nan')
-        print(f"{r['run_id']:<35} {nll:>10.4f} {fid:>10.2f} {gini:>10.3f}")
-
-    # aggregate by method
     import numpy as np
-    for method, label in [('ema', 'vanilla_ema'), ('drift', 'drift_no_pp_ste')]:
-        method_results = [r for r in results if method in r['run_id']]
-        nlls = [r['best_val_nll'] for r in method_results]
-        fids = [r['gen_fid'] for r in method_results if r['gen_fid'] is not None]
-        print(f"\n{label}: NLL {np.mean(nlls):.4f}±{np.std(nlls):.4f}"
-              + (f"  gen FID {np.mean(fids):.2f}±{np.std(fids):.2f}" if fids else ""))
 
-    print('='*70)
+    def _g(r, key):
+        v = r.get(key)
+        return float('nan') if v is None else v
+
+    print(f"\n{'='*84}")
+    print(f"PRIOR FULL RESULTS  (K={k}, phase={phase}, 20k steps)")
+    print(f"{'run_id':<32} {'val NLL':>9} {'recon FID':>10} {'gen FID':>9} "
+          f"{'best T':>7} {'smp Gini':>9}")
+    print('-'*84)
+    for r in results:
+        print(f"{r['run_id']:<32} {_g(r,'best_val_nll'):>9.4f} {_g(r,'recon_fid'):>10.2f} "
+              f"{_g(r,'gen_fid'):>9.2f} {_g(r,'best_temp'):>7.2f} {_g(r,'sample_gini'):>9.3f}")
+
+    # aggregate by method: NLL, recon-FID (tokenizer), gen-FID (tokenizer+prior),
+    # and the prior gap (gen - recon = what the prior costs)
+    agg = {}
+    for method, label in [('ema', 'vanilla_ema'), ('drift', 'drift_no_pp_ste')]:
+        mr = [r for r in results if method in r['run_id']]
+        nlls = [r['best_val_nll'] for r in mr]
+        rfid = [r['recon_fid'] for r in mr if r.get('recon_fid') is not None]
+        gfid = [r['gen_fid'] for r in mr if r.get('gen_fid') is not None]
+        agg[method] = {'nll': nlls, 'recon': rfid, 'gen': gfid}
+        line = f"\n{label}: NLL {np.mean(nlls):.3f}±{np.std(nlls):.3f}"
+        if rfid:
+            line += f"  recon-FID {np.mean(rfid):.2f}±{np.std(rfid):.2f}"
+        if gfid:
+            line += f"  gen-FID {np.mean(gfid):.2f}±{np.std(gfid):.2f}"
+        if rfid and gfid:
+            line += f"  prior-gap {np.mean(gfid)-np.mean(rfid):+.2f}"
+        print(line)
+
+    # the headline tension: drift usually wins recon-FID but its codes are harder
+    # to model, so the gen-FID verdict is the interesting open question
+    if agg['ema']['recon'] and agg['drift']['recon']:
+        d_recon = np.mean(agg['drift']['recon']) - np.mean(agg['ema']['recon'])
+        print(f"\nΔ recon-FID (drift − EMA): {d_recon:+.2f}  "
+              "(negative = drift's tokenizer reconstructs better)")
+    if agg['ema']['gen'] and agg['drift']['gen']:
+        d_gen = np.mean(agg['drift']['gen']) - np.mean(agg['ema']['gen'])
+        print(f"Δ gen-FID   (drift − EMA): {d_gen:+.2f}  "
+              "(negative = drift also generates better despite harder-to-model codes)")
+        print("VERDICT: " + ("✓ drift's reconstruction edge survives generation"
+                             if d_gen < 0 else
+                             "~ drift reconstructs better but the harder prior eats the gen-FID gain"))
+    print('='*84)
 
 
 # ----- linear probe experiment -----
@@ -568,3 +595,116 @@ def linear_probe(phase: str = 'phase_cifar100', k: int = 512):
         else:
             print("VERDICT: ✗  No semantic advantage — uniform codes ≠ semantically richer codes")
     print('='*70)
+
+
+# ----- CNN probe experiment (Experiment A: transfer / recognition) -----
+
+@app.function(
+    image = image,
+    gpu = 'L40S',
+    volumes = {'/vol': volume},
+    timeout = 60 * 60,
+)
+def run_cnn_probe(config_dict: dict) -> dict:
+    """Train one CNN probe head on a frozen VQ-VAE's latent grid."""
+    import sys
+    sys.path.insert(0, '/root/scaling_drifting_vqvae')
+    from experiments.cnn_probe import CNNProbeConfig, train_probe
+
+    cfg = CNNProbeConfig(**{k: v for k, v in config_dict.items()
+                            if k in CNNProbeConfig.__dataclass_fields__})
+    cfg.data_root = '/vol/data'
+    cfg.vqvae_root = '/vol/runs'
+    cfg.out_root = '/vol/runs'
+    result = train_probe(cfg)
+    volume.commit()
+    return result
+
+
+@app.local_entrypoint()
+def cnn_probe(phase: str = 'phase_cifar100', k: int = 512,
+              representation: str = 'zq', head: str = 'cnn',
+              epochs: int = 50, include_controls: bool = True):
+    """CNN probe: train a small conv head on frozen VQ-VAE latents, drift vs EMA.
+
+    The stronger, spatial version of the linear probe. Freezes the encoder +
+    codebook and trains only the head, so accuracy differences come from the
+    frozen features alone (transfer learning / feature extraction).
+
+    Representations: 'zq' (quantized latents, primary), 'ze' (pre-quant encoder
+    output), 'codes' (discrete tokens via a learned embedding).
+
+    Usage:
+        modal run experiments/modal_app.py::cnn_probe --k 512
+        modal run experiments/modal_app.py::cnn_probe --k 512 --representation codes
+        modal run experiments/modal_app.py::cnn_probe --k 1024 --head linear
+    """
+    import numpy as np
+
+    configs = []
+    for method_suffix in ['vanilla_ema', 'drift_no_pp_ste']:
+        for seed in [0, 1, 2]:
+            vqvae_run_id = f'cifar100_{method_suffix}_K{k}_seed{seed}'
+            tag = 'ema' if 'ema' in method_suffix else 'drift'
+            configs.append({
+                'run_id': f'cnnprobe_{tag}_{representation}_{head}_K{k}_seed{seed}',
+                'backbone': 'vqvae',
+                'vqvae_phase': phase,
+                'vqvae_run_id': vqvae_run_id,
+                'vqvae_ckpt': 'final.pt',
+                'dataset': 'cifar100',
+                'representation': representation,
+                'head': head,
+                'epochs': epochs,
+                'seed': seed,
+            })
+
+    # reference baselines: random (untrained) backbone and raw pixels
+    if include_controls:
+        configs.append({
+            'run_id': f'cnnprobe_random_{representation}_{head}_K{k}_seed0',
+            'backbone': 'random', 'random_method': 'vanilla_ema',
+            'random_codebook_size': k, 'dataset': 'cifar100',
+            'representation': representation, 'head': head, 'epochs': epochs, 'seed': 0,
+        })
+        configs.append({
+            'run_id': f'cnnprobe_pixels_{head}_seed0',
+            'backbone': 'vqvae', 'dataset': 'cifar100',
+            'representation': 'pixels', 'head': head, 'epochs': epochs, 'seed': 0,
+        })
+
+    print(f'Launching {len(configs)} CNN probe runs '
+          f'(K={k}, rep={representation}, head={head}, {epochs} epochs)...')
+    calls = [run_cnn_probe.spawn(cfg) for cfg in configs]
+    results = [c.get() for c in calls]
+
+    print(f"\n{'='*72}")
+    print(f"CNN PROBE  (K={k}, rep={representation}, head={head}, phase={phase})")
+    print(f"{'run_id':<42} {'top1':>8} {'top5':>8}")
+    print('-'*72)
+    for r in results:
+        print(f"{r['run_id']:<42} {r['test_top1']*100:>7.1f}% {r['test_top5']*100:>7.1f}%")
+
+    def agg(tag):
+        rs = [r for r in results if r['run_id'].startswith(f'cnnprobe_{tag}_')]
+        return ([r['test_top1'] for r in rs], [r['test_top5'] for r in rs])
+
+    print()
+    for tag, label in [('ema', 'vanilla_ema'), ('drift', 'drift_no_pp_ste')]:
+        t1, t5 = agg(tag)
+        if t1:
+            print(f"{label} K={k}:  top1 {np.mean(t1)*100:.1f}±{np.std(t1)*100:.1f}%"
+                  f"  top5 {np.mean(t5)*100:.1f}±{np.std(t5)*100:.1f}%  (n={len(t1)})")
+
+    e1, _ = agg('ema'); d1, _ = agg('drift')
+    if e1 and d1:
+        dt = np.mean(d1) - np.mean(e1)
+        print(f"\nΔ (drift − EMA): top1 {dt*100:+.2f}pp")
+        print("VERDICT: " + ("✓ drift features transfer better" if dt > 0.01
+                              else "~ no clear advantage at this head capacity"))
+    if include_controls:
+        for tag in ['random', 'pixels']:
+            rs = [r for r in results if r['run_id'].startswith(f'cnnprobe_{tag}_')]
+            if rs:
+                print(f"  reference [{tag}]: top1 {rs[0]['test_top1']*100:.1f}%")
+    print('='*72)
