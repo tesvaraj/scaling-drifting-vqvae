@@ -708,3 +708,41 @@ def cnn_probe(phase: str = 'phase_cifar100', k: int = 512,
             if rs:
                 print(f"  reference [{tag}]: top1 {rs[0]['test_top1']*100:.1f}%")
     print('='*72)
+
+
+# ----- train the CIFAR-100 VQ-VAEs the downstream experiments need -----
+
+@app.local_entrypoint()
+def train_cifar100_downstream(k: int = 512, seeds: str = '0,1,2'):
+    """Train the frozen VQ-VAEs the downstream experiments read (vanilla_ema +
+    drift_no_pp_ste, CIFAR-100, 30k iters). Writes checkpoints to the volume so
+    cnn_probe / prior_full can load them. Mirrors configs/phase_cifar100.py.
+
+    Launch DETACHED so it keeps running after you close the terminal:
+        modal run --detach experiments/modal_app.py::train_cifar100_downstream
+        modal run --detach experiments/modal_app.py::train_cifar100_downstream --k 1024
+    """
+    seed_list = [int(s) for s in str(seeds).split(',')]
+
+    base = dict(
+        phase='phase_cifar100', dataset='cifar100', train_iter=30000,
+        batch_size=128, log_every=50, val_every=1000, image_every=2500,
+        ckpt_every=5000, eval_ssim=True, eval_lpips=True, eval_fid=True,
+        tags=['cifar100', 'downstream-retrain'],
+    )
+
+    configs = []
+    for seed in seed_list:
+        configs.append({**base, 'method': 'vanilla_ema', 'codebook_size': k,
+                        'seed': seed, 'run_id': f'cifar100_vanilla_ema_K{k}_seed{seed}'})
+        configs.append({**base, 'method': 'drift', 'codebook_size': k, 'seed': seed,
+                        'energy_terms': ('nn', 'pn'), 'rotation_trick': False,
+                        'run_id': f'cifar100_drift_no_pp_ste_K{k}_seed{seed}'})
+
+    print(f'Launching {len(configs)} CIFAR-100 VQ-VAE runs (K={k}, 30k iters, detached)...')
+    calls = [run_experiment.spawn(c) for c in configs]
+    for c, cfg in zip(calls, configs):
+        print(f"  spawned {cfg['run_id']:<40} call={c.object_id}")
+    print('\nDetached. Checkpoints will land at '
+          '/vol/runs/phase_cifar100/<run_id>/checkpoints/final.pt')
+    print('Monitor:  modal app list   (or the Modal dashboard)')
