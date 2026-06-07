@@ -762,3 +762,111 @@ def train_cifar100_downstream(k: int = 512, seeds: str = '0,1,2'):
     print('\nDetached. Checkpoints will land at '
           '/vol/runs/phase_cifar100/<run_id>/checkpoints/final.pt')
     print('Monitor:  modal app list   (or the Modal dashboard)')
+
+
+# ----- paper figures: reconstruction + generated-sample comparisons -----
+
+@app.function(image = image, gpu = 'L40S', volumes = {'/vol': volume}, timeout = 20 * 60)
+def _make_recon_compare(phase: str, k: int, seed: int, n: int) -> dict:
+    """Decode the SAME CIFAR-100 test images through the EMA and Drift VQ-VAEs and
+    save a side-by-side grid (rows: original / EMA recon / Drift recon)."""
+    import sys, math
+    sys.path.insert(0, '/root/scaling_drifting_vqvae')
+    import torch
+    from pathlib import Path
+    from torchvision.utils import save_image
+    from experiments.prior import load_vqvae_frozen
+    from experiments.data import build_dataset
+
+    device = 'cuda'
+    ds = build_dataset('cifar100', '/vol/data')
+    origs = torch.stack([ds.val[i][0] for i in range(n)]).to(device)
+
+    def _psnr01(a, b):  # inputs in [-1,1] -> convert to [0,1]
+        a, b = (a + 1) / 2, (b + 1) / 2
+        mse = ((a - b) ** 2).mean().item()
+        return 10.0 * math.log10(1.0 / mse) if mse > 0 else 99.0
+
+    rows = [origs]
+    psnrs = {}
+    for tag, suffix in [('ema', 'vanilla_ema'), ('drift', 'drift_no_pp_ste')]:
+        ckpt = f'/vol/runs/{phase}/cifar100_{suffix}_K{k}_seed{seed}/checkpoints/final.pt'
+        model, _ = load_vqvae_frozen(ckpt, device)
+        with torch.no_grad():
+            recon = model(origs)[0].clamp(-1, 1)
+        rows.append(recon)
+        psnrs[tag] = _psnr01(origs, recon)
+
+    grid = torch.cat(rows, dim=0)  # [orig ; ema ; drift]
+    out = Path('/vol/runs/phase_downstream_figs'); out.mkdir(parents=True, exist_ok=True)
+    path = out / f'recon_compare_K{k}_seed{seed}.png'
+    save_image((grid * 0.5 + 0.5).clamp(0, 1), str(path), nrow=n)
+    volume.commit()
+    return {'path': str(path), 'psnr': psnrs, 'n': n}
+
+
+@app.local_entrypoint()
+def recon_compare(phase: str = 'phase_cifar100', k: int = 512, seed: int = 0, n: int = 12):
+    """Side-by-side reconstruction figure (original / EMA / Drift) on identical
+    test images. Runnable now with the trained VQ-VAEs.
+        modal run experiments/modal_app.py::recon_compare --k 512
+    """
+    r = _make_recon_compare.remote(phase, k, seed, n)
+    print(f"\nsaved figure to volume: {r['path']}")
+    print(f"mean recon PSNR — EMA {r['psnr']['ema']:.2f} dB, "
+          f"Drift {r['psnr']['drift']:.2f} dB  (Δ {r['psnr']['drift']-r['psnr']['ema']:+.2f})")
+    print("pull it:  modal volume get drifting-vqvae "
+          "/runs/phase_downstream_figs ./downstream_figs")
+
+
+@app.function(image = image, gpu = 'L40S', volumes = {'/vol': volume}, timeout = 20 * 60)
+def _make_samples_compare(prior_phase: str, vqvae_phase: str, k: int, seed: int, n: int) -> dict:
+    """Generate samples from the EMA and Drift priors and save a side-by-side grid
+    (top block EMA samples, bottom block Drift samples). Needs prior_full to have run."""
+    import sys, math
+    sys.path.insert(0, '/root/scaling_drifting_vqvae')
+    import torch
+    from pathlib import Path
+    from torchvision.utils import save_image
+    from experiments.prior import load_vqvae_frozen, TokenPrior
+
+    device = 'cuda'
+    blocks = []
+    info = {}
+    for tag, suffix in [('ema', 'vanilla_ema'), ('drift', 'drift_no_pp_ste')]:
+        pck = torch.load(f'/vol/runs/{prior_phase}/prior_{tag}_K{k}_seed{seed}/prior_final.pt',
+                         map_location=device, weights_only=False)
+        prior = TokenPrior(vocab_size=pck['K'], seq_len=pck['seq_len'],
+                           d_model=pck['d_model'], n_heads=pck['n_heads'],
+                           n_layers=pck['n_layers']).to(device)
+        prior.load_state_dict(pck['prior']); prior.eval()
+        temp = pck.get('best_temp') or 1.0
+        vae, _ = load_vqvae_frozen(
+            f'/vol/runs/{vqvae_phase}/cifar100_{suffix}_K{k}_seed{seed}/checkpoints/final.pt', device)
+        H = W = int(math.sqrt(pck['seq_len']))
+        with torch.no_grad():
+            tok = prior.sample(n, temperature=temp, device=device).reshape(n, H, W)
+            imgs = vae.decode_indices(tok).clamp(-1, 1)
+        blocks.append(imgs)
+        info[tag] = {'temp': temp}
+
+    grid = torch.cat(blocks, dim=0)  # [ema samples ; drift samples]
+    out = Path('/vol/runs/phase_downstream_figs'); out.mkdir(parents=True, exist_ok=True)
+    path = out / f'samples_compare_K{k}_seed{seed}.png'
+    save_image((grid * 0.5 + 0.5).clamp(0, 1), str(path), nrow=n)
+    volume.commit()
+    return {'path': str(path), 'info': info, 'n': n}
+
+
+@app.local_entrypoint()
+def samples_compare(prior_phase: str = 'phase_prior', vqvae_phase: str = 'phase_cifar100',
+                    k: int = 512, seed: int = 0, n: int = 16):
+    """Side-by-side generated-samples figure (EMA prior vs Drift prior). Run after
+    prior_full (it needs prior_final.pt).
+        modal run experiments/modal_app.py::samples_compare --k 512
+    """
+    r = _make_samples_compare.remote(prior_phase, vqvae_phase, k, seed, n)
+    print(f"\nsaved figure to volume: {r['path']}  (EMA T={r['info']['ema']['temp']}, "
+          f"Drift T={r['info']['drift']['temp']})")
+    print("pull it:  modal volume get drifting-vqvae "
+          "/runs/phase_downstream_figs ./downstream_figs")

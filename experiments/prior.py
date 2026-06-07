@@ -403,6 +403,33 @@ def train_prior(cfg: PriorConfig) -> dict:
         print(f'Best gen-FID {gen_fid:.2f} at T={best_temp:.2f}  '
               f'(recon-FID {recon_fid:.2f}, prior gap {gen_fid - recon_fid:+.2f}, '
               f'train Gini {train_gini:.3f})')
+
+        # ---- paper visuals: generated samples + reconstruction grid ----
+        # Saved per run so the EMA and Drift runs can be placed side by side.
+        try:
+            from torchvision.utils import save_image
+            fig_dir = out_dir / 'figures'
+            fig_dir.mkdir(parents=True, exist_ok=True)
+            n_show = 16
+            prior.eval()
+            with torch.no_grad():
+                # (a) generated samples at the best temperature
+                gtok = prior.sample(n_show, temperature=best_temp, device=device).reshape(n_show, H, W)
+                gen_imgs = vqvae.decode_indices(gtok).clamp(-1, 1)
+                save_image((gen_imgs * 0.5 + 0.5).clamp(0, 1),
+                           str(fig_dir / 'samples_grid.png'), nrow=8)
+                # (b) reconstruction grid: top half original, bottom half VQ-VAE recon
+                #     of the SAME images (decode their real codes). Visualizes recon-FID.
+                origs = torch.stack([ds.val[i][0] for i in range(n_show)]).to(device)
+                rec = vqvae.decode_indices(
+                    val_tokens[:n_show].reshape(n_show, H, W).to(device)).clamp(-1, 1)
+                save_image((torch.cat([origs, rec], dim=0) * 0.5 + 0.5).clamp(0, 1),
+                           str(fig_dir / 'recon_grid.png'), nrow=n_show)
+            prior.train()
+            print(f'  saved {fig_dir}/samples_grid.png and recon_grid.png')
+        except Exception as e:
+            print(f'[warn] figure saving failed: {e}')
+
         if wandb:
             wandb.log({'eval/gen_fid': gen_fid, 'eval/recon_fid': recon_fid,
                        'eval/best_temp': best_temp, 'eval/sample_gini': sample_gini,
@@ -430,5 +457,14 @@ def train_prior(cfg: PriorConfig) -> dict:
     }
     with open(out_dir / 'prior_summary.json', 'w') as f:
         json.dump(summary, f, indent=2)
+
+    # save prior weights so generated-sample figures can be regenerated without retraining
+    try:
+        torch.save({'prior': prior.state_dict(), 'seq_len': seq_len, 'K': K,
+                    'd_model': cfg.d_model, 'n_heads': cfg.n_heads,
+                    'n_layers': cfg.n_layers, 'best_temp': best_temp},
+                   out_dir / 'prior_final.pt')
+    except Exception as e:
+        print(f'[warn] prior checkpoint save failed: {e}')
 
     return summary

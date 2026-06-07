@@ -323,6 +323,8 @@ def train_probe(cfg: CNNProbeConfig) -> dict:
             print(f'  epoch {epoch:3d}  val top1 {vt1*100:.2f}  '
                   f'(best test top1 {best["test_top1"]*100:.2f})')
 
+    final_t1, final_t5 = evaluate(Xte, yte)  # final-epoch test acc, alongside best-epoch
+
     summary = {
         'run_id': cfg.run_id,
         'backbone': cfg.backbone,
@@ -330,11 +332,15 @@ def train_probe(cfg: CNNProbeConfig) -> dict:
         'representation': cfg.representation,
         'head': cfg.head,
         'K': K,
+        'seed': cfg.seed,
         'n_params': n_params,
         'n_classes': n_classes,
+        'n_train': int(len(Xtr)), 'n_val': int(len(Xval)), 'n_test': int(len(Xte)),
         'best_epoch': best['epoch'],
         'test_top1': best['test_top1'],
         'test_top5': best['test_top5'],
+        'test_top1_final': final_t1,
+        'test_top5_final': final_t5,
         'val_top1': best['val_top1'],
         'curve': curve,
         'wallclock_s': time.time() - t0,
