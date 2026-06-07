@@ -76,6 +76,26 @@ volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing = True)
 app = modal.App(APP_NAME)
 
 
+# Stdlib stats shim so the LOCAL entrypoints (which print summary tables) don't
+# require numpy in whatever env launches `modal run`. Remote functions still
+# `import numpy as np` inside the container, which shadows this.
+class _Np:
+    @staticmethod
+    def mean(xs):
+        xs = list(xs)
+        return sum(xs) / len(xs) if xs else float('nan')
+
+    @staticmethod
+    def std(xs):
+        xs = list(xs)
+        if not xs:
+            return float('nan')
+        m = _Np.mean(xs)
+        return (sum((x - m) ** 2 for x in xs) / len(xs)) ** 0.5
+
+np = _Np()
+
+
 # ----- remote function -----
 
 @app.function(
@@ -461,8 +481,6 @@ def prior_full(phase: str = 'phase_cifar100', k: int = 512):
     results = [c.get() for c in calls]
 
     # summary table
-    import numpy as np
-
     def _g(r, key):
         v = r.get(key)
         return float('nan') if v is None else v
@@ -546,7 +564,6 @@ def linear_probe(phase: str = 'phase_cifar100', k: int = 512):
         modal run experiments/modal_app.py::linear_probe --k 1024
         modal run experiments/modal_app.py::linear_probe --k 512 --phase phase_cifar100
     """
-    import numpy as np
 
     configs = []
     for method_label, method_suffix in [('ema', 'vanilla_ema'), ('drift', 'drift_no_pp_ste')]:
@@ -639,7 +656,6 @@ def cnn_probe(phase: str = 'phase_cifar100', k: int = 512,
         modal run experiments/modal_app.py::cnn_probe --k 512 --representation codes
         modal run experiments/modal_app.py::cnn_probe --k 1024 --head linear
     """
-    import numpy as np
 
     configs = []
     for method_suffix in ['vanilla_ema', 'drift_no_pp_ste']:
