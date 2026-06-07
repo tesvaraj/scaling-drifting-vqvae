@@ -715,9 +715,14 @@ def cnn_probe(phase: str = 'phase_cifar100', k: int = 512,
     e1, _ = agg('ema'); d1, _ = agg('drift')
     if e1 and d1:
         dt = np.mean(d1) - np.mean(e1)
-        print(f"\nΔ (drift − EMA): top1 {dt*100:+.2f}pp")
-        print("VERDICT: " + ("✓ drift features transfer better" if dt > 0.01
-                              else "~ no clear advantage at this head capacity"))
+        beat = min(d1) > max(e1)   # every drift seed beats every EMA seed
+        print(f"\nΔ (drift − EMA): top1 {dt*100:+.2f}pp   all-seeds-beat={beat}")
+        if beat:
+            print("VERDICT: ✓ drift transfers better — every drift seed beats every EMA seed")
+        elif dt > 0:
+            print("VERDICT: ~ drift leads on average but seeds overlap")
+        else:
+            print("VERDICT: ✗ no transfer advantage")
     if include_controls:
         for tag in ['random', 'pixels']:
             rs = [r for r in results if r['run_id'].startswith(f'cnnprobe_{tag}_')]
