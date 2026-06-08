@@ -875,3 +875,31 @@ def samples_compare(prior_phase: str = 'phase_prior', vqvae_phase: str = 'phase_
           f"Drift T={r['info']['drift']['temp']})")
     print("pull it:  modal volume get drifting-vqvae "
           "/runs/phase_downstream_figs ./downstream_figs")
+
+
+# ----- run the downstream aggregator on the volume (paper tables + FID plot) -----
+
+@app.function(image = image, volumes = {'/vol': volume}, timeout = 10 * 60)
+def _downstream_tables() -> dict:
+    import os, sys
+    os.environ['DOWNSTREAM_RUNS'] = '/vol/runs'   # read before importing the script
+    sys.path.insert(0, '/root/scaling_drifting_vqvae')
+    from experiments.scripts import aggregate_downstream as agg
+    out = {'cnn': agg.aggregate_cnn_probe(), 'prior': agg.aggregate_prior()}
+    volume.commit()
+    return out
+
+
+@app.local_entrypoint()
+def downstream_tables():
+    """Aggregate all CNN-probe + prior results on the volume into paper tables and
+    a FID-vs-temperature plot, without downloading anything.
+        modal run experiments/modal_app.py::downstream_tables
+    Outputs are also saved on the volume at /runs/downstream_summary/.
+    """
+    r = _downstream_tables.remote()
+    print('\n========== CNN PROBE (Experiment A) ==========')
+    print(r.get('cnn') or '(no cnn_probe results yet)')
+    print('\n========== PRIOR / GENERATION (Experiment B) ==========')
+    print(r.get('prior') or '(no prior results yet)')
+    print('\nSaved on volume: /runs/downstream_summary/{cnn_probe.md,prior.md,prior_fid_vs_temp.png}')

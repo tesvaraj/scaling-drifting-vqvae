@@ -61,12 +61,28 @@ harder to model (prior NLL 6.93 vs 5.81 bits/code in the pilot), so the gen-FID
 verdict tells us whether the reconstruction edge survives. Per-run JSON at
 `/vol/runs/phase_prior/<run_id>/prior_summary.json` (includes `gen_fid_by_temp`).
 
-## Pulling results back
-The printed summary tables are the headline. To grab the JSON locally:
+## Results and figures
+
+Each experiment prints its own summary when it runs. To get the combined
+paper tables (mean±std, deltas, all-seeds-beat) plus a FID-vs-temperature plot,
+run the aggregator on the volume — no downloads needed:
 ```bash
-modal volume get drifting-vqvae /runs/phase_cnn_probe ./runs/phase_cnn_probe
-modal volume get drifting-vqvae /runs/phase_prior     ./runs/phase_prior
+modal run experiments/modal_app.py::downstream_tables
 ```
+It also saves `cnn_probe.md`, `prior.md`, `prior_fid_vs_temp.png` to
+`/runs/downstream_summary/` on the volume.
+
+Side-by-side figures:
+```bash
+modal run experiments/modal_app.py::recon_compare   --k 512   # original / EMA / Drift recon
+modal run experiments/modal_app.py::samples_compare --k 512   # EMA vs Drift generated samples (after prior_full)
+```
+Figures land in `/runs/phase_downstream_figs/` and (per prior run)
+`/runs/phase_prior/<run_id>/figures/`. Pull a single image with
+`modal volume get drifting-vqvae /runs/phase_downstream_figs/recon_compare_K512_seed0.png .`
+(directory downloads are buggy in this Modal version — pull individual files).
+
+Headline numbers so far are in `experiment_A_results.md` and `experiment_B_results.md`.
 
 ## Notes
 - Compute is small: A is a few minutes per config (features cached once, tiny head);

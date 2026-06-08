@@ -29,7 +29,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-RUNS = os.path.join(ROOT, 'runs')
+# DOWNSTREAM_RUNS lets this run on Modal (/vol/runs) or locally (repo runs/).
+RUNS = os.environ.get('DOWNSTREAM_RUNS', os.path.join(ROOT, 'runs'))
 OUT = os.path.join(RUNS, 'downstream_summary')
 os.makedirs(OUT, exist_ok=True)
 
@@ -112,7 +113,9 @@ def aggregate_cnn_probe():
     with open(os.path.join(OUT, 'cnn_probe.csv'), 'w', newline='') as f:
         csv.writer(f).writerows(rows_csv)
     print('[cnn_probe] wrote cnn_probe.md / cnn_probe.csv\n')
-    print('\n'.join(md))
+    text = '\n'.join(md)
+    print(text)
+    return text
 
 
 def aggregate_prior():
@@ -173,6 +176,7 @@ def aggregate_prior():
         plt.tight_layout()
         plt.savefig(os.path.join(OUT, 'prior_fid_vs_temp.png'), dpi=200)
         print('[prior] wrote prior_fid_vs_temp.png')
+    return '\n'.join(md)
 
 
 if __name__ == '__main__':
