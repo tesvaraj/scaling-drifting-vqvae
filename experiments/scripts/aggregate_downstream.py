@@ -31,6 +31,9 @@ import matplotlib.pyplot as plt
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # DOWNSTREAM_RUNS lets this run on Modal (/vol/runs) or locally (repo runs/).
 RUNS = os.environ.get('DOWNSTREAM_RUNS', os.path.join(ROOT, 'runs'))
+# which phase dirs to read (per-dataset for non-cifar100 runs)
+CNN_PHASE = os.environ.get('DOWNSTREAM_CNN_PHASE', 'phase_cnn_probe')
+PRIOR_PHASE = os.environ.get('DOWNSTREAM_PRIOR_PHASE', 'phase_prior')
 OUT = os.path.join(RUNS, 'downstream_summary')
 os.makedirs(OUT, exist_ok=True)
 
@@ -55,7 +58,7 @@ def _tag(run_id):
 
 
 def aggregate_cnn_probe():
-    rows = _load(os.path.join(RUNS, 'phase_cnn_probe', '*', 'cnn_probe_summary.json'))
+    rows = _load(os.path.join(RUNS, CNN_PHASE, '*', 'cnn_probe_summary.json'))
     if not rows:
         print('[cnn_probe] no results found under runs/phase_cnn_probe/')
         return
@@ -119,7 +122,7 @@ def aggregate_cnn_probe():
 
 
 def aggregate_prior():
-    rows = _load(os.path.join(RUNS, 'phase_prior', '*', 'prior_summary.json'))
+    rows = _load(os.path.join(RUNS, PRIOR_PHASE, '*', 'prior_summary.json'))
     if not rows:
         print('\n[prior] no results found under runs/phase_prior/')
         return

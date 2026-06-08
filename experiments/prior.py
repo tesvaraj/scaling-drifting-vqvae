@@ -213,7 +213,8 @@ def load_vqvae_frozen(ckpt_path: str, device: str):
         drift_ema_decay=cfg.drift_ema_decay,
         drift_ema_dead_threshold=cfg.drift_ema_dead_threshold,
     )
-    model = VQAutoEncoder(ds.in_channels, cfg.hidden, cfg.dim, ds.n_downsample, quantizer)
+    n_down = cfg.n_downsample if getattr(cfg, 'n_downsample', None) is not None else ds.n_downsample
+    model = VQAutoEncoder(ds.in_channels, cfg.hidden, cfg.dim, n_down, quantizer)
     model.load_state_dict(ckpt['model'])
     model.to(device).eval()
     for p in model.parameters():

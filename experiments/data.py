@@ -69,6 +69,20 @@ def build_dataset(name: str, data_root: str) -> DatasetSpec:
         val = datasets.STL10(root = data_root, split = 'test', download = True, transform = tfm)
         return DatasetSpec(train, val, in_channels = 3, n_downsample = 3, image_size = 64)
 
+    if name == 'stl10_labeled':
+        # labeled-only STL-10 (10 classes) for the classification probe. The VAE is
+        # trained on 'stl10' (train+unlabeled); the probe needs labels, so use the
+        # 5k labeled train split and the 8k test split.
+        tfm = transforms.Compose([
+            transforms.Resize(64),
+            transforms.CenterCrop(64),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ])
+        train = datasets.STL10(root = data_root, split = 'train', download = True, transform = tfm)
+        val = datasets.STL10(root = data_root, split = 'test', download = True, transform = tfm)
+        return DatasetSpec(train, val, in_channels = 3, n_downsample = 3, image_size = 64)
+
     if name == 'fashion_mnist':
         tfm = transforms.Compose([
             transforms.ToTensor(),

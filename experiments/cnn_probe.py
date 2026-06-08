@@ -67,6 +67,7 @@ class CNNProbeConfig:
     # only used when backbone == 'random' (build arch without loading weights)
     random_method: str = 'vanilla_ema'
     random_codebook_size: int = 512
+    n_downsample: int = 0                 # random backbone: override latent size (0 = dataset default)
 
     dataset: str = 'cifar100'
 
@@ -175,7 +176,8 @@ def build_backbone(cfg: CNNProbeConfig, device: str):
         K = cfg.random_codebook_size
         dim = 64
         quant = build_quantizer(cfg.random_method, dim=dim, codebook_size=K)
-        model = VQAutoEncoder(ds.in_channels, 128, dim, ds.n_downsample, quant)
+        n_down = cfg.n_downsample if cfg.n_downsample else ds.n_downsample
+        model = VQAutoEncoder(ds.in_channels, 128, dim, n_down, quant)
         model.to(device).eval()
         for p in model.parameters():
             p.requires_grad_(False)
@@ -329,6 +331,7 @@ def train_probe(cfg: CNNProbeConfig) -> dict:
         'run_id': cfg.run_id,
         'backbone': cfg.backbone,
         'vqvae_run_id': cfg.vqvae_run_id if cfg.backbone == 'vqvae' else None,
+        'dataset': cfg.dataset,
         'representation': cfg.representation,
         'head': cfg.head,
         'K': K,

@@ -82,6 +82,7 @@ class TrainConfig:
     dim: int = 64
     hidden: int = 128
     codebook_size: int = 512
+    n_downsample: Optional[int] = None   # override dataset default (e.g. 2 -> 16x16 latent at 64px)
 
     # drift / hybrid hyperparams
     tau: float = 1.0
@@ -359,7 +360,8 @@ def train(cfg: TrainConfig) -> dict:
     )
 
     # ----- model -----
-    model = VQAutoEncoder(ds.in_channels, cfg.hidden, cfg.dim, ds.n_downsample,
+    n_down = cfg.n_downsample if cfg.n_downsample is not None else ds.n_downsample
+    model = VQAutoEncoder(ds.in_channels, cfg.hidden, cfg.dim, n_down,
                           quantizer).to(device)
     opt = AdamW(model.parameters(), lr = cfg.lr)
 

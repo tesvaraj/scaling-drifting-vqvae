@@ -450,23 +450,24 @@ def prior_pilot(phase: str = 'phase_cifar100', k: int = 512,
 
 
 @app.local_entrypoint()
-def prior_full(phase: str = 'phase_cifar100', k: int = 512):
+def prior_full(dataset: str = 'cifar100', k: int = 512):
     """Full 3-seed prior experiment with gen FID. Run after prior_pilot confirms signal.
 
     Usage:
         modal run experiments/modal_app.py::prior_full
-        modal run experiments/modal_app.py::prior_full --k 1024
+        modal run experiments/modal_app.py::prior_full --dataset stl10
     """
+    phase = f'phase_{dataset}'
+    prior_phase = 'phase_prior' if dataset == 'cifar100' else f'phase_prior_{dataset}'
     configs = []
     for method, vqvae_suffix in [('ema', f'vanilla_ema'), ('drift', f'drift_no_pp_ste')]:
         for seed in [0, 1, 2]:
-            vqvae_run_id = f'cifar100_{vqvae_suffix}_K{k}_seed{seed}'
             configs.append(dict(
                 run_id = f'prior_{method}_K{k}_seed{seed}',
-                phase = 'phase_prior',
-                dataset = 'cifar100',
+                phase = prior_phase,
+                dataset = dataset,
                 vqvae_phase = phase,
-                vqvae_run_id = vqvae_run_id,
+                vqvae_run_id = f'{dataset}_{vqvae_suffix}_K{k}_seed{seed}',
                 vqvae_ckpt = 'final.pt',
                 d_model = 256, n_layers = 4, n_heads = 8, dropout = 0.0,
                 train_steps = 20000, batch_size = 256, lr = 3e-4,
@@ -476,7 +477,7 @@ def prior_full(phase: str = 'phase_cifar100', k: int = 512):
                 wandb_mode = 'online',
             ))
 
-    print(f'Launching {len(configs)} prior runs (K={k}, 20k steps, gen FID)...')
+    print(f'Launching {len(configs)} prior runs ({dataset}, K={k}, 20k steps, gen FID)...')
     calls = [run_prior.spawn(cfg) for cfg in configs]
     results = [c.get() for c in calls]
 
@@ -639,36 +640,40 @@ def run_cnn_probe(config_dict: dict) -> dict:
 
 
 @app.local_entrypoint()
-def cnn_probe(phase: str = 'phase_cifar100', k: int = 512,
+def cnn_probe(dataset: str = 'cifar100', k: int = 512,
               representation: str = 'zq', head: str = 'cnn',
-              epochs: int = 50, include_controls: bool = True):
+              epochs: int = 50, include_controls: bool = True,
+              probe_dataset: str = '', n_downsample: int = 0):
     """CNN probe: train a small conv head on frozen VQ-VAE latents, drift vs EMA.
 
-    The stronger, spatial version of the linear probe. Freezes the encoder +
-    codebook and trains only the head, so accuracy differences come from the
-    frozen features alone (transfer learning / feature extraction).
+    Freezes the encoder + codebook and trains only the head, so accuracy
+    differences come from the frozen features alone (transfer learning).
+    Works on any dataset; STL-10 auto-uses its labeled split for classification.
 
     Representations: 'zq' (quantized latents, primary), 'ze' (pre-quant encoder
     output), 'codes' (discrete tokens via a learned embedding).
 
     Usage:
         modal run experiments/modal_app.py::cnn_probe --k 512
-        modal run experiments/modal_app.py::cnn_probe --k 512 --representation codes
-        modal run experiments/modal_app.py::cnn_probe --k 1024 --head linear
+        modal run experiments/modal_app.py::cnn_probe --dataset stl10 --representation zq
     """
+    phase = f'phase_{dataset}'
+    out_phase = 'phase_cnn_probe' if dataset == 'cifar100' else f'phase_cnn_probe_{dataset}'
+    if not probe_dataset:
+        probe_dataset = 'stl10_labeled' if dataset == 'stl10' else dataset
 
     configs = []
     for method_suffix in ['vanilla_ema', 'drift_no_pp_ste']:
         for seed in [0, 1, 2]:
-            vqvae_run_id = f'cifar100_{method_suffix}_K{k}_seed{seed}'
             tag = 'ema' if 'ema' in method_suffix else 'drift'
             configs.append({
                 'run_id': f'cnnprobe_{tag}_{representation}_{head}_K{k}_seed{seed}',
+                'out_phase': out_phase,
                 'backbone': 'vqvae',
                 'vqvae_phase': phase,
-                'vqvae_run_id': vqvae_run_id,
+                'vqvae_run_id': f'{dataset}_{method_suffix}_K{k}_seed{seed}',
                 'vqvae_ckpt': 'final.pt',
-                'dataset': 'cifar100',
+                'dataset': probe_dataset,
                 'representation': representation,
                 'head': head,
                 'epochs': epochs,
@@ -679,13 +684,16 @@ def cnn_probe(phase: str = 'phase_cifar100', k: int = 512,
     if include_controls:
         configs.append({
             'run_id': f'cnnprobe_random_{representation}_{head}_K{k}_seed0',
+            'out_phase': out_phase,
             'backbone': 'random', 'random_method': 'vanilla_ema',
-            'random_codebook_size': k, 'dataset': 'cifar100',
+            'random_codebook_size': k, 'dataset': probe_dataset,
             'representation': representation, 'head': head, 'epochs': epochs, 'seed': 0,
+            'n_downsample': n_downsample,
         })
         configs.append({
             'run_id': f'cnnprobe_pixels_{head}_seed0',
-            'backbone': 'vqvae', 'dataset': 'cifar100',
+            'out_phase': out_phase,
+            'backbone': 'vqvae', 'dataset': probe_dataset,
             'representation': 'pixels', 'head': head, 'epochs': epochs, 'seed': 0,
         })
 
@@ -734,47 +742,53 @@ def cnn_probe(phase: str = 'phase_cifar100', k: int = 512,
 # ----- train the CIFAR-100 VQ-VAEs the downstream experiments need -----
 
 @app.local_entrypoint()
-def train_cifar100_downstream(k: int = 512, seeds: str = '0,1,2'):
+def train_downstream_vaes(dataset: str = 'cifar100', k: int = 512, seeds: str = '0,1,2',
+                          n_downsample: int = 0, train_iter: int = 30000):
     """Train the frozen VQ-VAEs the downstream experiments read (vanilla_ema +
-    drift_no_pp_ste, CIFAR-100, 30k iters). Writes checkpoints to the volume so
-    cnn_probe / prior_full can load them. Mirrors configs/phase_cifar100.py.
+    drift_no_pp_ste) on any dataset. Checkpoints land in /vol/runs/phase_<dataset>/.
+    n_downsample=0 uses the dataset default; pass 2 for a 16x16 latent at 64px
+    (less compression, so reconstruction detail is more visible).
 
-    Launch DETACHED so it keeps running after you close the terminal:
-        modal run --detach experiments/modal_app.py::train_cifar100_downstream
-        modal run --detach experiments/modal_app.py::train_cifar100_downstream --k 1024
+    Launch DETACHED:
+        modal run --detach experiments/modal_app.py::train_downstream_vaes
+        modal run --detach experiments/modal_app.py::train_downstream_vaes --dataset stl10 --n-downsample 2
     """
     seed_list = [int(s) for s in str(seeds).split(',')]
+    phase = f'phase_{dataset}'
 
     base = dict(
-        phase='phase_cifar100', dataset='cifar100', train_iter=30000,
+        phase=phase, dataset=dataset, train_iter=train_iter,
         batch_size=128, log_every=50, val_every=1000, image_every=2500,
         ckpt_every=5000, eval_ssim=True, eval_lpips=True, eval_fid=True,
-        tags=['cifar100', 'downstream-retrain'],
+        tags=[dataset, 'downstream-retrain'],
     )
+    if n_downsample > 0:
+        base['n_downsample'] = n_downsample
 
     configs = []
     for seed in seed_list:
         configs.append({**base, 'method': 'vanilla_ema', 'codebook_size': k,
-                        'seed': seed, 'run_id': f'cifar100_vanilla_ema_K{k}_seed{seed}'})
+                        'seed': seed, 'run_id': f'{dataset}_vanilla_ema_K{k}_seed{seed}'})
         configs.append({**base, 'method': 'drift', 'codebook_size': k, 'seed': seed,
                         'energy_terms': ('nn', 'pn'), 'rotation_trick': False,
-                        'run_id': f'cifar100_drift_no_pp_ste_K{k}_seed{seed}'})
+                        'run_id': f'{dataset}_drift_no_pp_ste_K{k}_seed{seed}'})
 
-    print(f'Launching {len(configs)} CIFAR-100 VQ-VAE runs (K={k}, 30k iters, detached)...')
+    print(f'Launching {len(configs)} {dataset} VQ-VAE runs (K={k}, {train_iter} iters, '
+          f'n_downsample={n_downsample or "default"}, detached)...')
     calls = [run_experiment.spawn(c) for c in configs]
     for c, cfg in zip(calls, configs):
         print(f"  spawned {cfg['run_id']:<40} call={c.object_id}")
-    print('\nDetached. Checkpoints will land at '
-          '/vol/runs/phase_cifar100/<run_id>/checkpoints/final.pt')
-    print('Monitor:  modal app list   (or the Modal dashboard)')
+    print(f'\nDetached. Checkpoints will land at /vol/runs/{phase}/<run_id>/checkpoints/final.pt')
+    print('Monitor:  modal app list')
 
 
 # ----- paper figures: reconstruction + generated-sample comparisons -----
 
 @app.function(image = image, gpu = 'L40S', volumes = {'/vol': volume}, timeout = 20 * 60)
-def _make_recon_compare(phase: str, k: int, seed: int, n: int) -> dict:
-    """Decode the SAME CIFAR-100 test images through the EMA and Drift VQ-VAEs and
-    save a side-by-side grid (rows: original / EMA recon / Drift recon)."""
+def _make_recon_compare(dataset: str, phase: str, k: int, seed: int, n: int) -> dict:
+    """Decode the SAME test images through the EMA and Drift VQ-VAEs and save two
+    grids: reconstructions (original / EMA / Drift) and error maps (|original -
+    recon|, amplified) so the edge-detail difference is visible."""
     import sys, math
     sys.path.insert(0, '/root/scaling_drifting_vqvae')
     import torch
@@ -784,48 +798,51 @@ def _make_recon_compare(phase: str, k: int, seed: int, n: int) -> dict:
     from experiments.data import build_dataset
 
     device = 'cuda'
-    ds = build_dataset('cifar100', '/vol/data')
-    origs = torch.stack([ds.val[i][0] for i in range(n)]).to(device)
+    ds = build_dataset(dataset, '/vol/data')
+    origs01 = ((torch.stack([ds.val[i][0] for i in range(n)]).to(device)) + 1) / 2
 
-    def _psnr01(a, b):  # inputs in [-1,1] -> convert to [0,1]
-        a, b = (a + 1) / 2, (b + 1) / 2
+    def _psnr01(a, b):
         mse = ((a - b) ** 2).mean().item()
         return 10.0 * math.log10(1.0 / mse) if mse > 0 else 99.0
 
-    rows = [origs]
-    psnrs = {}
+    AMP = 4.0   # amplify the residual so small errors are visible
+    recon_rows, err_rows, psnrs = [origs01], [origs01], {}
     for tag, suffix in [('ema', 'vanilla_ema'), ('drift', 'drift_no_pp_ste')]:
-        ckpt = f'/vol/runs/{phase}/cifar100_{suffix}_K{k}_seed{seed}/checkpoints/final.pt'
+        ckpt = f'/vol/runs/{phase}/{dataset}_{suffix}_K{k}_seed{seed}/checkpoints/final.pt'
         model, _ = load_vqvae_frozen(ckpt, device)
         with torch.no_grad():
-            recon = model(origs)[0].clamp(-1, 1)
-        rows.append(recon)
-        psnrs[tag] = _psnr01(origs, recon)
+            rec01 = ((model((origs01 * 2 - 1))[0].clamp(-1, 1)) + 1) / 2
+        recon_rows.append(rec01)
+        err_rows.append(((rec01 - origs01).abs() * AMP).clamp(0, 1))
+        psnrs[tag] = _psnr01(origs01, rec01)
 
-    grid = torch.cat(rows, dim=0)  # [orig ; ema ; drift]
     out = Path('/vol/runs/phase_downstream_figs'); out.mkdir(parents=True, exist_ok=True)
-    path = out / f'recon_compare_K{k}_seed{seed}.png'
-    save_image((grid * 0.5 + 0.5).clamp(0, 1), str(path), nrow=n)
+    base = f'{dataset}_K{k}_seed{seed}'
+    p_recon = out / f'recon_compare_{base}.png'
+    p_err = out / f'recon_error_{base}.png'
+    save_image(torch.cat(recon_rows, 0).clamp(0, 1), str(p_recon), nrow=n)
+    save_image(torch.cat(err_rows, 0).clamp(0, 1), str(p_err), nrow=n)
     volume.commit()
-    return {'path': str(path), 'psnr': psnrs, 'n': n}
+    return {'recon': str(p_recon), 'error': str(p_err), 'psnr': psnrs, 'n': n}
 
 
 @app.local_entrypoint()
-def recon_compare(phase: str = 'phase_cifar100', k: int = 512, seed: int = 0, n: int = 12):
-    """Side-by-side reconstruction figure (original / EMA / Drift) on identical
-    test images. Runnable now with the trained VQ-VAEs.
-        modal run experiments/modal_app.py::recon_compare --k 512
+def recon_compare(dataset: str = 'cifar100', k: int = 512, seed: int = 0, n: int = 12):
+    """Reconstruction figure (original / EMA / Drift) + error maps, same test images.
+        modal run experiments/modal_app.py::recon_compare --dataset stl10
     """
-    r = _make_recon_compare.remote(phase, k, seed, n)
-    print(f"\nsaved figure to volume: {r['path']}")
+    phase = f'phase_{dataset}'
+    r = _make_recon_compare.remote(dataset, phase, k, seed, n)
+    print(f"\nrecon grid:  {r['recon']}")
+    print(f"error maps:  {r['error']}")
     print(f"mean recon PSNR — EMA {r['psnr']['ema']:.2f} dB, "
           f"Drift {r['psnr']['drift']:.2f} dB  (Δ {r['psnr']['drift']-r['psnr']['ema']:+.2f})")
-    print("pull it:  modal volume get drifting-vqvae "
-          "/runs/phase_downstream_figs ./downstream_figs")
+    print("pull a file:  modal volume get drifting-vqvae <path-after-/vol> .")
 
 
 @app.function(image = image, gpu = 'L40S', volumes = {'/vol': volume}, timeout = 20 * 60)
-def _make_samples_compare(prior_phase: str, vqvae_phase: str, k: int, seed: int, n: int) -> dict:
+def _make_samples_compare(dataset: str, prior_phase: str, vqvae_phase: str,
+                          k: int, seed: int, n: int) -> dict:
     """Generate samples from the EMA and Drift priors and save a side-by-side grid
     (top block EMA samples, bottom block Drift samples). Needs prior_full to have run."""
     import sys, math
@@ -847,7 +864,7 @@ def _make_samples_compare(prior_phase: str, vqvae_phase: str, k: int, seed: int,
         prior.load_state_dict(pck['prior']); prior.eval()
         temp = pck.get('best_temp') or 1.0
         vae, _ = load_vqvae_frozen(
-            f'/vol/runs/{vqvae_phase}/cifar100_{suffix}_K{k}_seed{seed}/checkpoints/final.pt', device)
+            f'/vol/runs/{vqvae_phase}/{dataset}_{suffix}_K{k}_seed{seed}/checkpoints/final.pt', device)
         H = W = int(math.sqrt(pck['seq_len']))
         with torch.no_grad():
             tok = prior.sample(n, temperature=temp, device=device).reshape(n, H, W)
@@ -857,20 +874,21 @@ def _make_samples_compare(prior_phase: str, vqvae_phase: str, k: int, seed: int,
 
     grid = torch.cat(blocks, dim=0)  # [ema samples ; drift samples]
     out = Path('/vol/runs/phase_downstream_figs'); out.mkdir(parents=True, exist_ok=True)
-    path = out / f'samples_compare_K{k}_seed{seed}.png'
+    path = out / f'samples_compare_{dataset}_K{k}_seed{seed}.png'
     save_image((grid * 0.5 + 0.5).clamp(0, 1), str(path), nrow=n)
     volume.commit()
     return {'path': str(path), 'info': info, 'n': n}
 
 
 @app.local_entrypoint()
-def samples_compare(prior_phase: str = 'phase_prior', vqvae_phase: str = 'phase_cifar100',
-                    k: int = 512, seed: int = 0, n: int = 16):
+def samples_compare(dataset: str = 'cifar100', k: int = 512, seed: int = 0, n: int = 16):
     """Side-by-side generated-samples figure (EMA prior vs Drift prior). Run after
     prior_full (it needs prior_final.pt).
-        modal run experiments/modal_app.py::samples_compare --k 512
+        modal run experiments/modal_app.py::samples_compare --dataset stl10
     """
-    r = _make_samples_compare.remote(prior_phase, vqvae_phase, k, seed, n)
+    prior_phase = 'phase_prior' if dataset == 'cifar100' else f'phase_prior_{dataset}'
+    vqvae_phase = f'phase_{dataset}'
+    r = _make_samples_compare.remote(dataset, prior_phase, vqvae_phase, k, seed, n)
     print(f"\nsaved figure to volume: {r['path']}  (EMA T={r['info']['ema']['temp']}, "
           f"Drift T={r['info']['drift']['temp']})")
     print("pull it:  modal volume get drifting-vqvae "
@@ -880,9 +898,13 @@ def samples_compare(prior_phase: str = 'phase_prior', vqvae_phase: str = 'phase_
 # ----- run the downstream aggregator on the volume (paper tables + FID plot) -----
 
 @app.function(image = image, volumes = {'/vol': volume}, timeout = 10 * 60)
-def _downstream_tables() -> dict:
+def _downstream_tables(dataset: str) -> dict:
     import os, sys
     os.environ['DOWNSTREAM_RUNS'] = '/vol/runs'   # read before importing the script
+    os.environ['DOWNSTREAM_CNN_PHASE'] = (
+        'phase_cnn_probe' if dataset == 'cifar100' else f'phase_cnn_probe_{dataset}')
+    os.environ['DOWNSTREAM_PRIOR_PHASE'] = (
+        'phase_prior' if dataset == 'cifar100' else f'phase_prior_{dataset}')
     sys.path.insert(0, '/root/scaling_drifting_vqvae')
     from experiments.scripts import aggregate_downstream as agg
     out = {'cnn': agg.aggregate_cnn_probe(), 'prior': agg.aggregate_prior()}
@@ -891,13 +913,14 @@ def _downstream_tables() -> dict:
 
 
 @app.local_entrypoint()
-def downstream_tables():
-    """Aggregate all CNN-probe + prior results on the volume into paper tables and
-    a FID-vs-temperature plot, without downloading anything.
+def downstream_tables(dataset: str = 'cifar100'):
+    """Aggregate the CNN-probe + prior results for a dataset on the volume into
+    paper tables and a FID-vs-temperature plot, without downloading anything.
         modal run experiments/modal_app.py::downstream_tables
+        modal run experiments/modal_app.py::downstream_tables --dataset stl10
     Outputs are also saved on the volume at /runs/downstream_summary/.
     """
-    r = _downstream_tables.remote()
+    r = _downstream_tables.remote(dataset)
     print('\n========== CNN PROBE (Experiment A) ==========')
     print(r.get('cnn') or '(no cnn_probe results yet)')
     print('\n========== PRIOR / GENERATION (Experiment B) ==========')
