@@ -61,6 +61,7 @@ image = (
         'scipy',
         'gdown',
         'scikit-learn',
+        'h5py',
     )
     # add the local repo so `experiments` and `vector_quantize_pytorch` are importable
     .add_local_dir(
