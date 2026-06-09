@@ -1,8 +1,6 @@
 # Paper Context — Scaling Drifting VQ-VAE
 
 **Last updated**: 2026-05-28 (phase_optimized + k8192_fix local artifacts verified)
-**Owner**: Hemal Arora (hemal1@stanford.edu), Stanford CS231N Spring 2026
-
 **Data quality key used throughout:**
 - ✓ = clean, complete run (local CSV artifact, verified this session)
 - ✗ = excluded (corrupted, crashed, or collapsed — not counted in any mean/std)
