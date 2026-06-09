@@ -1,6 +1,6 @@
 # Scaling Drifting VQ-VAE — Agent Context
 
-**CS231N Spring 2026 final project. Owner: Hemal Arora (hemal1@stanford.edu)**
+**CS231N Spring 2026 final project**
 
 ## What this project is
 
@@ -67,4 +67,4 @@ python -m experiments.scripts.diagnose --phase phase2b_confirmation \
 
 See `experiments/CONTEXT.md` for full results, interpretations, and what to run next.
 
-**TL;DR current state**: Phases 1/2/3 done. Key finding: removing U_pp (hidden-hidden repulsion) makes drift beat vanilla_ema at 10k iters. Phase 2b (30k confirmation with 3 seeds) is the critical next run.
+**TL;DR current state**: All phases complete. Headline result: `drift_no_pp_ste` beats `vanilla_ema` by +0.77 dB PSNR and −11.6 FID at 30k on CIFAR-10, with 3× codebook utilization. Result holds on CIFAR-100 (+0.72 dB) and STL-10 (+0.55 dB). Project submitted.

@@ -1,3 +1,22 @@
+# Scaling Drifting VQ-VAE — CS231N Spring 2026
+
+This repository contains the code for the CS231N final project *"Scaling Drifting VQ-VAE"*. We investigate whether a physics-inspired codebook quantizer ("DriftingVQ") — which replaces the standard commitment loss with pairwise potential energy — can match or beat vanilla EMA VQ-VAE on reconstruction quality while achieving dramatically higher codebook utilization.
+
+### For TAs: where to look
+
+| What | Where |
+|---|---|
+| Core DriftingVQ quantizer | [`vector_quantize_pytorch/drifting_vq.py`](vector_quantize_pytorch/drifting_vq.py) |
+| Training loop & config | [`experiments/train.py`](experiments/train.py), [`experiments/configs/`](experiments/configs/) |
+| Model architecture | [`experiments/models.py`](experiments/models.py) |
+| All experimental results | [`experiments/CONTEXT.md`](experiments/CONTEXT.md) |
+| Experiment harness docs | [`experiments/README.md`](experiments/README.md) |
+| AI usage documentation | [`AI_USAGE.md`](AI_USAGE.md) |
+
+The repo is forked from [`lucidrains/vector-quantize-pytorch`](https://github.com/lucidrains/vector-quantize-pytorch). The original library README follows below. Our additions are `vector_quantize_pytorch/drifting_vq.py` and the entire `experiments/` directory.
+
+---
+
 <img src="./images/vq.png" width="500px"></img>
 
 ## Vector Quantization - Pytorch
