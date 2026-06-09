@@ -65,7 +65,7 @@ outputs.
 
 \noindent\textbf{Fighting codebook collapse.} Codebook underuse is a recurring
 problem. Common remedies revive dead codes by re-seeding them from recent encoder
-outputs \cite{reservoir}, or reparameterize the codebook, as in SimVQ \cite{simvq},
+outputs, or reparameterize the codebook, as in SimVQ \cite{simvq},
 which routes all codes through one shared linear layer so that updating any code
 nudges the rest. These methods raise \emph{utilization}, the fraction of codes used at
 least once, but as we show that is a weak proxy: it misses the Zipfian concentration
@@ -117,8 +117,8 @@ the decoder mirrors it. CIFAR images use two downsampling stages ($32{\to}8$); t
 $64{\times}64$ datasets use three. The quantizer takes the $8{\times}8{\times}64$
 feature map, replaces each spatial vector with its nearest codebook entry, and returns
 the quantized map, the index assignment, and any quantizer-specific
-loss.\footnote{Our quantizer implementations build on the
-\texttt{vector-quantize-pytorch} library~\cite{lucidrains_vqpytorch}.}
+loss.\footnote{Our quantizer implementations build on the open-source
+\texttt{vector-quantize-pytorch} library (github.com/lucidrains/vector-quantize-pytorch).}
 
 Since the encoder, decoder, and training budget are identical everywhere, any
 difference in results comes from the quantizer alone. We train with AdamW (learning
