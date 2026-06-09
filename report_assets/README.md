@@ -8,6 +8,6 @@
 - `samples_ema.png`, `samples_drift.png` — generated samples, one method each.
 - `recon_grid_drift.png` — Drift originals (top) vs reconstructions (bottom).
 
-Numbers are in `experiment_A_results.md` and `experiment_B_results.md`.
+Numbers are in `paper_context.md` (sections 5 and 6).
 Regenerate figures/tables: `modal run experiments/modal_app.py::downstream_tables`
 (plus `recon_compare` / `samples_compare`).
