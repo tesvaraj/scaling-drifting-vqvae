@@ -44,7 +44,7 @@ def make_vanilla_runs() -> list[TrainConfig]:
       - energy_terms: ('pp', 'nn', 'pn') (All three forces used)
     """
     runs: list[TrainConfig] = []
-    target_datasets = ['omniglot', 'pcam', 'galaxy', 'dtd']
+    target_datasets = ['omniglot', 'pcam', 'galaxy10_decals', 'dtd']
 
     base_vanilla = TrainConfig(
         phase='m3_table_vanilla_placeholder',
@@ -56,7 +56,7 @@ def make_vanilla_runs() -> list[TrainConfig]:
         val_every=2000,
         eval_fid=True,
         eval_ssim=True,
-        method='vanilla',
+        method='vanilla_ema',
         energy_terms=('pp', 'nn', 'pn'),
         rotation_trick=True,
         ste=False,
@@ -69,8 +69,5 @@ def make_vanilla_runs() -> list[TrainConfig]:
     return runs
 
 
-def make_runs(phase: str = 'ablations') -> list[TrainConfig]:
-    """Unified entry point for the experiment launcher router."""
-    if phase in ('ablations', 'phase4_star'):
-        return make_vanilla_runs()
-    raise ValueError(f"Unknown sub-phase suite target: {phase}")
+def make_runs(phase: str = '') -> list[TrainConfig]:
+    return make_vanilla_runs()
